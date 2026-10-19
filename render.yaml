@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: suhachbank
+    runtime: python
+    rootDir: app
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn server:app --workers 1 --threads 4 --bind 0.0.0.0:$PORT
+    plan: starter          # Disk can goi tra phi (free khong co Disk -> mat du lieu)
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DB_PATH
+        value: /var/data/cards.db
+      - key: ADMIN_KEY
+        sync: false        # nhap tren Render dashboard
+      - key: DEVICE_KEY
+        sync: false        # nhap tren Render dashboard (trung deviceKey trong ESP32)
