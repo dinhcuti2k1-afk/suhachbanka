@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quản lý thẻ</title>
+<style>
+  body{font-family:system-ui,sans-serif;max-width:440px;margin:0 auto;padding:16px;background:#f4f6f8}
+  .box{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 4px #0002}
+  .tabs{display:flex;gap:6px}
+  .tabs button{flex:1;padding:12px 4px;font-size:15px;border:0;border-radius:8px;background:#e2e8f0;color:#111}
+  .tabs button.on{background:#2563eb;color:#fff}
+  button.act{width:100%;padding:14px;font-size:16px;border:0;border-radius:8px;color:#fff;margin-top:8px}
+  input{width:100%;padding:12px;font-size:16px;border:1px solid #ccc;border-radius:8px;box-sizing:border-box;margin-top:8px}
+  .uid{font-family:monospace;font-size:22px;font-weight:700}
+  .bal{font-size:28px;font-weight:700;color:#16a34a}
+  .quick{display:flex;gap:8px;margin-top:8px}
+  .quick button{flex:1;padding:10px;border:0;border-radius:8px;background:#e2e8f0}
+  #msg{min-height:22px;font-weight:600}
+  .warn{color:#dc2626;font-weight:600}
+</style>
+</head>
+<body>
+<h2>Quản lý thẻ</h2>
+
+<div class="box"><input id="key" type="password" placeholder="Mật khẩu quản trị"></div>
+
+<div class="box">
+  <div>Mã thẻ (bấm phím 7 trên thiết bị để xem):</div>
+  <input id="code" type="text" maxlength="20" placeholder="Nhập mã thẻ, vd: A1B2C3D4" style="text-transform:uppercase;font-family:monospace;font-size:20px" autocomplete="off">
+  <div class="uid" id="uid">---</div>
+  <div id="name">---</div>
+  <div>Số dư: <span class="bal" id="bal">---</span></div>
+  <div id="status" class="warn"></div>
+</div>
+
+<div class="tabs">
+  <button id="t-topup" class="on" onclick="setMode('topup')">1. Nạp tiền</button>
+  <button id="t-charge" onclick="setMode('charge')">2. Trừ tiền</button>
+  <button id="t-reg" onclick="setMode('reg')">3. Lưu thẻ</button>
+</div>
+
+<div class="box" style="margin-top:12px">
+  <div id="amtBox">
+    <input id="amount" type="number" inputmode="numeric" placeholder="Số tiền (VNĐ)">
+    <div class="quick">
+      <button onclick="setAmt(10000)">10k</button>
+      <button onclick="setAmt(20000)">20k</button>
+      <button onclick="setAmt(50000)">50k</button>
+      <button onclick="setAmt(100000)">100k</button>
+    </div>
+  </div>
+  <div id="nameBox" style="display:none">
+    <input id="newname" type="text" placeholder="Tên thẻ (vd: Nguyễn Văn A, thẻ số 01)">
+    <input id="newtype" type="text" maxlength="30" placeholder="Loại thẻ (vd: Vàng, VIP, Học sinh)">
+  </div>
+  <button id="go" class="act" onclick="doAction()">Nạp</button>
+  <p id="msg"></p>
+</div>
+
+<div class="box">
+  <b>Lịch sử thẻ này</b>
+  <ul id="hist"></ul>
+</div>
+
+<script>
+let mode = "topup", cur = {uid:null, registered:false}, lastSeq = -1, manual = false, lookupTimer = null;
+const $ = id => document.getElementById(id);
+const fmt = n => n.toLocaleString("vi-VN") + "đ";
+const H = () => ({"Content-Type":"application/json","X-Admin-Key":$("key").value});
+const setAmt = v => $("amount").value = v;
+
+async function api(url, body) {
+  const opt = body ? {method:"POST", body:JSON.stringify(body)} : {};
+  const r = await fetch(url, {...opt, headers:H()});
+  return r.json();
+}
+
+function setMode(m) {
+  mode = m;
+  ["topup","charge","reg"].forEach(x => $("t-"+x).classList.toggle("on", x===m));
+  $("amtBox").style.display = m==="reg" ? "none" : "block";
+  $("nameBox").style.display = m==="reg" ? "block" : "none";
+  const go = $("go");
+  go.textContent = {topup:"Nạp tiền", charge:"Trừ tiền", reg:"Lưu thẻ"}[m];
+  go.style.background = {topup:"#16a34a", charge:"#dc2626", reg:"#2563eb"}[m];
+  $("msg").textContent = "";
+  if (m === "reg" && cur.registered) go.textContent = "Cập nhật thẻ";
+}
+
+function show(r) {
+  cur = r;
+  $("uid").textContent = r.uid || "---";
+  $("name").textContent = r.registered ? (r.name + (r.card_type ? " · " + r.card_type : "")) : (r.uid ? "(chưa lưu thẻ)" : "---");
+  if (mode === "reg") $("go").textContent = r.registered ? "Cập nhật thẻ" : "Lưu thẻ";
+  $("bal").textContent = r.registered ? fmt(r.balance) : "---";
+  $("status").textContent = (r.uid && !r.registered) ? "Thẻ chưa lưu, qua tab 3 để lưu trước" : "";
+}
+
+async function poll() {
+  try {
+    const r = await api("/api/last");
+    if (!r.ok) { $("msg").textContent = "Sai mật khẩu"; return; }
+    if (r.seq !== lastSeq) {
+      lastSeq = r.seq;
+      $("msg").textContent = r.uid ? "Đã nhận thẻ" : "";
+      if (r.uid) loadHistory(r.uid);
+      $("newname").value = r.registered ? (r.name || "") : "";
+      $("newtype").value = r.registered ? (r.card_type || "") : "";
+      manual = false;                       // the moi quet -> bo ma go tay
+      $("code").value = r.uid || "";
+    }
+    if (!manual) show(r);
+  } catch(e) {}
+}
+
+// go ma the bang tay (ma hien tren man hinh thiet bi khi bam phim 7)
+$("code").addEventListener("input", () => {
+  manual = true;
+  clearTimeout(lookupTimer);
+  lookupTimer = setTimeout(async () => {
+    const uid = $("code").value.trim().toUpperCase();
+    if (!uid) { manual = false; return; }
+    const r = await api("/api/card/" + encodeURIComponent(uid));
+    if (!r.ok) { $("msg").textContent = r.msg || "Lỗi"; return; }
+    show(r);
+    $("newname").value = r.registered ? (r.name || "") : "";
+    $("newtype").value = r.registered ? (r.card_type || "") : "";
+    $("msg").textContent = r.registered ? "" : "Không tìm thấy thẻ có mã này";
+    if (r.registered) loadHistory(uid);
+  }, 300);
+});
+
+async function doAction() {
+  if (!cur.uid) return $("msg").textContent = "Chưa quẹt thẻ";
+  let r;
+  if (mode === "reg") {
+    const name = $("newname").value.trim();
+    if (!name) return $("msg").textContent = "Nhập tên thẻ";
+    const card_type = $("newtype").value.trim();
+    r = await api(cur.registered ? "/api/update_card" : "/api/register", {uid:cur.uid, name, card_type});
+    if (r.ok) { $("msg").textContent = cur.registered ? "Đã cập nhật thẻ" : "Đã lưu thẻ"; }
+  } else {
+    const amount = parseInt($("amount").value);
+    if (!amount || amount <= 0) return $("msg").textContent = "Nhập số tiền hợp lệ";
+    r = await api(mode === "topup" ? "/api/topup" : "/api/charge", {uid:cur.uid, amount});
+    if (r.ok) {
+      $("msg").textContent = (mode==="topup" ? "Đã nạp " : "Đã trừ ") + fmt(amount);
+      $("amount").value = "";
+    }
+  }
+  if (!r.ok) $("msg").textContent = r.msg || "Lỗi";
+  if (manual) { const u = cur.uid; show({...(await api("/api/card/" + u))}); } else poll();
+  loadHistory(cur.uid);
+}
+
+async function loadHistory(uid) {
+  const r = await api("/api/history/" + uid);
+  $("hist").innerHTML = (r.rows||[]).map(x =>
+    `<li>${x[0]>0?"+":""}${fmt(x[0])} <small>${x[1]}</small></li>`).join("");
+}
+
+setMode("topup");
+setInterval(poll, 1000);
+</script>
+</body>
+</html>
